@@ -25,20 +25,11 @@ mapper_device device;
 mapper_monitor monitor;
 mapper_db db;
 
-typedef struct _internalMapping
-{
-    mapper_signal sig;
-    struct _internalMapping *next;
-} *internalMapping;
-
 void signalHandler(mapper_signal sig, mapper_db_signal props,
                    mapper_timetag_t *timetag, void *value)
 {
-    internalMapping map = props->user_data;
-    while (map) {
-        msig_update(map->sig, value);
-        map = map->next;
-    }
+    mapper_signal sig_out = props->user_data;
+    msig_update(sig_out, value);
 }
 
 void linkHandler(mapper_db_link lnk, mapper_db_action_t a, void *user)
@@ -68,55 +59,40 @@ void connectionHandler(mapper_db_connection con, mapper_db_action_t a, void *use
         case MDB_NEW:
         {
             printf("got new connection! %s -> %s\n", con->src_name, con->dest_name);
-            char input[256], output[256];
+            char src[256], dest[256];
             mapper_signal insig, outsig;
             // check if we already have the output
             outsig = mdev_get_output_by_name(device, con->dest_name, 0);
             if (!outsig) {
                 // if not, create it
-                outsig = mdev_add_output(device, con->dest_name, con->dest_length, con->dest_type, 0,
-                                         (con->range.known | CONNECTION_RANGE_DEST_MIN) ? &con->range.dest_min : 0,
-                                         (con->range.known | CONNECTION_RANGE_DEST_MAX) ? &con->range.dest_max : 0);
+                outsig = mdev_add_output(device, con->dest_name, con->dest_length, con->dest_type, 0, 0, 0);
+                mdev_add_input(device, con->dest_name, con->dest_length, con->dest_type, 0,
+                               (con->range.known | CONNECTION_RANGE_DEST_MIN) ? &con->range.dest_min : 0,
+                               (con->range.known | CONNECTION_RANGE_DEST_MAX) ? &con->range.dest_max : 0,
+                               signalHandler, outsig);
             }
-            snprintf(output, 256, "%s%s", mdev_name(device), con->dest_name);
+            snprintf(dest, 256, "%s%s", mdev_name(device), con->dest_name);
             // check if we already have the input
             insig = mdev_get_input_by_name(device, con->src_name, 0);
-            if (insig) {
-                mapper_db_signal props = msig_properties(insig);
-                internalMapping map = props->user_data;
-                int mappingFound = 0;
-                while (map->next) {
-                    if (map->sig == outsig) {
-                        mappingFound = 1;
-                        break;
-                    }
-                    map = map->next;
-                }
-                if (!mappingFound) {
-                    internalMapping newmap = calloc(1, sizeof(internalMapping));
-                    newmap->sig = outsig;
-                    map->next = newmap;
-                }
-            }
-            else {
+            if (!insig) {
                 // if not, create it
-                internalMapping newmap = calloc(1, sizeof(internalMapping));
-                newmap->sig = outsig;
-                mdev_add_input(device, con->src_name, con->src_length, con->src_type, 0,
-                               (con->range.known | CONNECTION_RANGE_SRC_MIN) ? &con->range.src_min : 0,
-                               (con->range.known | CONNECTION_RANGE_SRC_MAX) ? &con->range.src_max : 0,
-                               signalHandler, newmap);
+                outsig = mdev_add_output(device, con->src_name, con->src_length, con->src_type, 0,
+                                         (con->range.known | CONNECTION_RANGE_SRC_MIN) ? &con->range.src_min : 0,
+                                         (con->range.known | CONNECTION_RANGE_SRC_MAX) ? &con->range.src_max : 0);
+                mdev_add_input(device, con->src_name, con->src_length, con->src_type,
+                               0, 0, 0, signalHandler, outsig);
             }
-            snprintf(input, 256, "%s%s", mdev_name(device), con->src_name);
+            snprintf(src, 256, "%s%s", mdev_name(device), con->src_name);
             // create new connections
-            mapper_monitor_connect(monitor, con->src_name, input, 0, 0);
-            unsigned int flags = ((con->clip_min ? CONNECTION_CLIPMIN : 0) +
-                                  (con->clip_max ? CONNECTION_CLIPMAX : 0) +
-                                  (con->range.known ? CONNECTION_RANGE_KNOWN : 0) +
-                                  (con->expression ? CONNECTION_EXPRESSION : 0) +
-                                  (con->mode ? CONNECTION_MODE : 0) +
+            mapper_monitor_connect(monitor, con->src_name, src, 0, 0);
+            unsigned int flags = ((con->clip_min ? CONNECTION_CLIPMIN : 0) |
+                                  (con->clip_max ? CONNECTION_CLIPMAX : 0) |
+                                  con->range.known |
+                                  (con->expression ? CONNECTION_EXPRESSION : 0) |
+                                  (con->mode ? CONNECTION_MODE : 0) |
                                   (con->muted ? CONNECTION_MUTED : 0));
-            mapper_monitor_connect(monitor, output, con->dest_name, con, flags);
+            mapper_monitor_connect(monitor, src, dest, con, flags);
+            mapper_monitor_connect(monitor, dest, con->dest_name, 0, 0);
             mapper_monitor_disconnect(monitor, con->src_name, con->dest_name);
             break;
         }
@@ -152,22 +128,20 @@ void startMonitor()
 
 void cleanup()
 {
-    printf("\nCleaning up!\n");
-    // TODO: need to iterate through signals here and free the internalMapping struct
-    mapper_signal sig;
-    mapper_db_signal props;
-    internalMapping map, temp;
-    int i, num = mdev_num_inputs(device);
-    for (i = 0; i < num; i++) {
-        sig = mdev_get_input_by_index(device, i);
-        props = msig_properties(sig);
-        map = props->user_data;
-        while (map) {
-            temp = map->next;
-            free(map);
-            map = temp;
-        }
+    printf("\nReturning connections!\n");
+    mapper_db_connection_t **con = mapper_db_get_connections_by_src_dest_device_names(db,
+                                                mdev_name(device), mdev_name(device));
+    while (con) {
+        unsigned int flags = (((*con)->clip_min ? CONNECTION_CLIPMIN : 0) |
+                              ((*con)->clip_max ? CONNECTION_CLIPMAX : 0) |
+                              (*con)->range.known |
+                              ((*con)->expression ? CONNECTION_EXPRESSION : 0) |
+                              ((*con)->mode ? CONNECTION_MODE : 0) |
+                              ((*con)->muted ? CONNECTION_MUTED : 0));
+        mapper_monitor_connect(monitor, strchr((*con)->src_name+1, '/'), strchr((*con)->dest_name+1, '/'), *con, flags);
+        con = mapper_db_connection_next(con);
     }
+    printf("\nCleaning up!\n");
     mdev_free(device);
     mapper_monitor_free(monitor);
 }
@@ -176,6 +150,7 @@ void loop()
 {
     createDevice();
     startMonitor();
+    mapper_monitor_link(monitor, mdev_name(device), mdev_name(device));
     while (!done) {
         // poll libmapper outputs
         mapper_monitor_poll(monitor, 0);
