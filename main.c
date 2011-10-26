@@ -2,9 +2,9 @@
 // greedyMapper.c
 // program for centralizing distributed libmapper network topologies
 // This program is intended as a proof-of-concept to show that libmapper can be used in
-// a centralized client-server-like mode if desired
+// a centralized client-server-like mode if desired.
 // http://www.idmil.org/software/libmapper
-// Joseph Malloch, IDMIL 2010
+// Joseph Malloch, IDMIL 2011
 //
 // This software was written in the Input Devices and Music Interaction
 // Laboratory at McGill University in Montreal, and is copyright those
@@ -54,8 +54,10 @@ void linkHandler(mapper_db_link lnk, mapper_db_action_t a, void *user)
 
 void connectionHandler(mapper_db_connection con, mapper_db_action_t a, void *user)
 {
-    // check if this applies to me
-    int length = strlen(mdev_name(device));
+    /* Check if this applies to me. We will check if the name string matches without its ordinal
+     * in case there are multiple copies of greedyMapper running. Without this safeguard two or
+     * more copies would re-route each other's mappings in an infinite loop. */
+    int length = strlen("/greedyMapper.");
     if (strncmp(con->src_name, mdev_name(device), length) == 0 ||
         strncmp(con->dest_name, mdev_name(device), length) == 0) {
         // this connection involves me - don't interfere
