@@ -3,7 +3,7 @@
 // program for centralizing distributed libmapper network topologies
 // This program is intended as a proof-of-concept to show that libmapper can be used in
 // a centralized client-server-like mode if desired.
-// http://www.idmil.org/software/libmapper
+// http://www.libmapper.org
 // Joseph Malloch, IDMIL 2011
 //
 // This software was written in the Input Devices and Music Interaction
